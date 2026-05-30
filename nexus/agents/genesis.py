@@ -40,7 +40,7 @@ class GenesisAgent(BaseAgent):
             seed_context=seed_context,
         )
 
-        raw = self.llm.complete(prompt, system=SYSTEM)
+        raw = self.llm.complete(prompt, system=SYSTEM, temperature=0.9)
         hypotheses = _parse_hypotheses(raw)
 
         ids = []

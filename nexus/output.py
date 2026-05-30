@@ -17,8 +17,8 @@ def generate(result: dict, config: ResearchConfig):
     _write_markdown(result, config, conn, md_path)
     _write_json(result, json_path)
 
-    print(f"[NEXUS v2] Report → {md_path}")
-    print(f"[NEXUS v2] JSON   → {json_path}")
+    print(f"[NEXUS v3] Report → {md_path}")
+    print(f"[NEXUS v3] JSON   → {json_path}")
     return md_path, json_path
 
 def _write_markdown(result: dict, config: ResearchConfig, conn, path: str):
@@ -27,7 +27,7 @@ def _write_markdown(result: dict, config: ResearchConfig, conn, path: str):
     gaps      = result.get("gaps", {})
     lines     = []
 
-    lines.append(f"# NEXUS v2 Research Report\n")
+    lines.append(f"# NEXUS v3 Research Report\n")
     lines.append(f"**Goal:** {result['goal']}\n")
     lines.append(f"**Domain:** {result['domain']}")
     lines.append(f"**Keywords:** {', '.join(result['keywords'])}")
@@ -38,13 +38,16 @@ def _write_markdown(result: dict, config: ResearchConfig, conn, path: str):
 
     lines.append("## Ranked Hypotheses\n")
     for i, h in enumerate(ranked, 1):
+        confidence = h.get("confidence", "n/a")
+        conf_badge = {"high": "HIGH", "medium": "MEDIUM", "low": "LOW"}.get(confidence, confidence)
         lines.append(f"### {i}. {h['hypothesis_text']}\n")
-        lines.append(f"| Metric | Score |")
-        lines.append(f"|--------|-------|")
-        lines.append(f"| Overall | **{h['score']}** |")
-        lines.append(f"| Novelty | {h['novelty']} |")
-        lines.append(f"| Evidence | {h['evidence']} |")
-        lines.append(f"| Feasibility | {h['feasibility']} |")
+        lines.append(f"| Metric | Score | Std Dev |")
+        lines.append(f"|--------|-------|---------|")
+        lines.append(f"| Overall | **{h['score']}** | — |")
+        lines.append(f"| Novelty | {h['novelty']} | ±{h.get('std_novelty', 0)} |")
+        lines.append(f"| Evidence | {h['evidence']} | ±{h.get('std_evidence', 0)} |")
+        lines.append(f"| Feasibility | {h['feasibility']} | ±{h.get('std_feasibility', 0)} |")
+        lines.append(f"| Confidence | `{conf_badge}` | — |")
         lines.append("")
         lines.append(f"**Critique:**")
         lines.append(f"> {h['critique'].replace(chr(10), chr(10) + '> ')}\n")
@@ -58,7 +61,7 @@ def _write_markdown(result: dict, config: ResearchConfig, conn, path: str):
 
     if analogies.get("analogies"):
         lines.append("## Analogies from Adjacent Fields\n")
-        lines.append(f"**Core mechanism identified:** {analogies.get('mechanism', '')}\n")
+        lines.append(f"**Core mechanism:** {analogies.get('mechanism', '')}\n")
         for ana in analogies["analogies"]:
             lines.append(f"### Field: {ana.get('field', '')}\n")
             lines.append(f"**Analogy:** {ana.get('analogy', '')}\n")
@@ -82,7 +85,10 @@ def _write_markdown(result: dict, config: ResearchConfig, conn, path: str):
         lines.append("---\n")
 
     lines.append("## Pipeline Summary\n")
-    lines.append(f"Pipeline: Genesis → Fetcher → Critic → Ranker → Analogy Bridge → Gap Detector → Evolver")
+    lines.append(
+        "Pipeline: Genesis → Fetcher (async) → Critic → "
+        "Ranker (3× confidence) → Analogy Bridge → Gap Detector → Evolver"
+    )
     lines.append(f"LLM backend: `{config.llm_backend}` / `{config.ollama_model}`\n")
 
     with open(path, "w") as f:
@@ -101,13 +107,17 @@ def _write_json(result: dict, path: str):
         "generated_at"    : datetime.now().isoformat(),
         "hypotheses"      : [
             {
-                "rank"        : i + 1,
-                "text"        : h["hypothesis_text"],
-                "score"       : h["score"],
-                "novelty"     : h["novelty"],
-                "evidence"    : h["evidence"],
-                "feasibility" : h["feasibility"],
-                "critique"    : h["critique"],
+                "rank"           : i + 1,
+                "text"           : h["hypothesis_text"],
+                "score"          : h["score"],
+                "novelty"        : h["novelty"],
+                "evidence"       : h["evidence"],
+                "feasibility"    : h["feasibility"],
+                "std_novelty"    : h.get("std_novelty", 0),
+                "std_evidence"   : h.get("std_evidence", 0),
+                "std_feasibility": h.get("std_feasibility", 0),
+                "confidence"     : h.get("confidence", "n/a"),
+                "critique"       : h["critique"],
             }
             for i, h in enumerate(result["ranked"])
         ],

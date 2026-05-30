@@ -1,4 +1,5 @@
 import re
+import statistics
 from nexus.agents.base import BaseAgent
 from nexus.db import update_hypothesis_score
 
@@ -21,12 +22,14 @@ Scoring guide:
 - Feasibility: 1.0 = testable with standard lab methods, 0.0 = untestable
 """
 
+SCORE_RUNS = 3
+
 class RankerAgent(BaseAgent):
     name = "ranker"
 
     def execute(self, session_id: str, round_num: int, context: dict) -> dict:
         critiques = context["critiques"]
-        ranked = []
+        ranked    = []
 
         for c in critiques:
             prompt = PROMPT.format(
@@ -35,9 +38,35 @@ class RankerAgent(BaseAgent):
                 n_papers=c["n_papers"],
             )
 
-            raw = self.llm.complete(prompt, system=SYSTEM)
-            novelty, evidence, feasibility = _parse_scores(raw)
-            score = round((novelty + evidence + feasibility) / 3, 4)
+            all_novelty     = []
+            all_evidence    = []
+            all_feasibility = []
+
+            for _ in range(SCORE_RUNS):
+                raw = self.llm.complete(
+                    prompt, system=SYSTEM, temperature=0.1
+                )
+                n, e, f = _parse_scores(raw)
+                all_novelty.append(n)
+                all_evidence.append(e)
+                all_feasibility.append(f)
+
+            novelty     = round(statistics.mean(all_novelty),     4)
+            evidence    = round(statistics.mean(all_evidence),    4)
+            feasibility = round(statistics.mean(all_feasibility), 4)
+            score       = round((novelty + evidence + feasibility) / 3, 4)
+
+            nov_std  = round(statistics.stdev(all_novelty)     if len(all_novelty)     > 1 else 0.0, 4)
+            evi_std  = round(statistics.stdev(all_evidence)    if len(all_evidence)    > 1 else 0.0, 4)
+            fea_std  = round(statistics.stdev(all_feasibility) if len(all_feasibility) > 1 else 0.0, 4)
+            avg_std  = round((nov_std + evi_std + fea_std) / 3, 4)
+
+            if avg_std < 0.1:
+                confidence = "high"
+            elif avg_std < 0.2:
+                confidence = "medium"
+            else:
+                confidence = "low"
 
             update_hypothesis_score(
                 self.conn,
@@ -46,36 +75,43 @@ class RankerAgent(BaseAgent):
             )
 
             ranked.append({
-                "hypothesis_id": c["hypothesis_id"],
+                "hypothesis_id"  : c["hypothesis_id"],
                 "hypothesis_text": c["hypothesis_text"],
-                "score": score,
-                "novelty": novelty,
-                "evidence": evidence,
-                "feasibility": feasibility,
-                "critique": c["critique"],
+                "score"          : score,
+                "novelty"        : novelty,
+                "evidence"       : evidence,
+                "feasibility"    : feasibility,
+                "std_novelty"    : nov_std,
+                "std_evidence"   : evi_std,
+                "std_feasibility": fea_std,
+                "confidence"     : confidence,
+                "critique"       : c["critique"],
             })
 
         ranked.sort(key=lambda x: x["score"], reverse=True)
 
         return {
-            "ranked": ranked,
-            "_summary": f"Ranked {len(ranked)} hypotheses, top score: {ranked[0]['score'] if ranked else 0}"
+            "ranked"  : ranked,
+            "_summary": (
+                f"Ranked {len(ranked)} hypotheses — "
+                f"top score: {ranked[0]['score']} "
+                f"({ranked[0]['confidence']} confidence)"
+                if ranked else "No hypotheses ranked"
+            )
         }
 
 def _parse_scores(raw: str) -> tuple:
-    defaults = (0.5, 0.5, 0.5)
-    try:
-        novelty = _extract("novelty", raw)
-        evidence = _extract("evidence", raw)
-        feasibility = _extract("feasibility", raw)
-        return novelty, evidence, feasibility
-    except Exception:
-        return defaults
+    return (
+        _extract("novelty",     raw),
+        _extract("evidence",    raw),
+        _extract("feasibility", raw),
+    )
 
 def _extract(label: str, text: str) -> float:
-    pattern = rf"{label}[:\s]+([0-9]*\.?[0-9]+)"
-    match = re.search(pattern, text, re.IGNORECASE)
+    match = re.search(
+        rf"{label}[:\s]+([0-9]*\.?[0-9]+)",
+        text, re.IGNORECASE
+    )
     if match:
-        val = float(match.group(1))
-        return max(0.0, min(1.0, val))
+        return max(0.0, min(1.0, float(match.group(1))))
     return 0.5
