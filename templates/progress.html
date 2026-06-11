@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NEXUS — Running</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+  <div class="container">
+
+    <header>
+      <div class="logo">⬡ NEXUS</div>
+      <p class="tagline">Running research pipeline…</p>
+    </header>
+
+    <div class="card">
+      <div class="goal-badge">🔬 {{ goal }}</div>
+
+      <div class="progress-header">
+        <span class="pulse"></span>
+        <span id="status-text">Agents initialising…</span>
+      </div>
+
+      <div id="log-box">
+        <div class="log-line dim">Waiting for first agent…</div>
+      </div>
+    </div>
+
+    <footer>NEXUS v3 · Ollama · Local</footer>
+
+  </div>
+
+  <script>
+    const logBox    = document.getElementById("log-box");
+    const statusTxt = document.getElementById("status-text");
+    const source    = new EventSource("/stream");
+    let   results   = null;
+
+    function appendLog(text, cls = "") {
+      const div = document.createElement("div");
+      div.className = "log-line " + cls;
+      div.textContent = text;
+      logBox.appendChild(div);
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    source.onmessage = function(e) {
+      const msg = JSON.parse(e.data);
+
+      if (msg.type === "log") {
+        // Colour-code by content
+        let cls = "";
+        if (msg.text.includes("Round"))       cls = "log-round";
+        else if (msg.text.includes("agent"))  cls = "log-agent";
+        else if (msg.text.includes("Error") ||
+                 msg.text.includes("failed")) cls = "log-error";
+        else if (msg.text.includes("Fetch") ||
+                 msg.text.includes("paper"))  cls = "log-fetch";
+        appendLog(msg.text, cls);
+        statusTxt.textContent = msg.text.replace(/^\s+/, "");
+      }
+
+      else if (msg.type === "done") {
+        source.close();
+        results = msg;
+        statusTxt.textContent = "✓ Pipeline complete — rendering results…";
+        appendLog("✓ Done. Building results page…", "log-done");
+        // Store results in sessionStorage and redirect
+        sessionStorage.setItem("nexus_results", JSON.stringify(msg));
+        setTimeout(() => { window.location.href = "/results"; }, 800);
+      }
+
+      else if (msg.type === "error") {
+        source.close();
+        statusTxt.textContent = "✗ Pipeline error";
+        appendLog("✗ ERROR: " + msg.text, "log-error");
+      }
+    };
+
+    source.onerror = function() {
+      source.close();
+      appendLog("✗ Lost connection to server.", "log-error");
+    };
+  </script>
+</body>
+</html>

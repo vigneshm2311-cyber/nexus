@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NEXUS — Results</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+  <div class="container">
+
+    <header>
+      <div class="logo">⬡ NEXUS</div>
+      <p class="tagline">Research complete</p>
+    </header>
+
+    <div id="results-root">
+      <div class="dim" style="text-align:center;padding:2rem;">Loading results…</div>
+    </div>
+
+    <div class="actions">
+      <a href="/" class="btn-secondary">← New Research</a>
+      <a id="dl-md"   href="#" class="btn-secondary" style="display:none">⬇ Markdown</a>
+      <a id="dl-json" href="#" class="btn-secondary" style="display:none">⬇ JSON</a>
+    </div>
+
+    <footer>NEXUS v3 · Ollama · Local</footer>
+
+  </div>
+
+  <script>
+    const raw = sessionStorage.getItem("nexus_results");
+    if (!raw) {
+      document.getElementById("results-root").innerHTML =
+        '<div class="alert">No results found. <a href="/">Run a new search.</a></div>';
+    } else {
+      const data = JSON.parse(raw);
+      renderResults(data);
+    }
+
+    function scoreColor(score) {
+      if (score >= 0.75) return "score-high";
+      if (score >= 0.50) return "score-mid";
+      return "score-low";
+    }
+
+    function renderResults(data) {
+      const root = document.getElementById("results-root");
+      let html = "";
+
+      data.ranked.forEach((h, i) => {
+        const sc    = typeof h.score === "number" ? h.score.toFixed(3) : h.score;
+        const rank  = i + 1;
+        const cls   = scoreColor(parseFloat(sc));
+
+        html += `
+        <div class="hyp-card">
+          <div class="hyp-header">
+            <span class="rank">#${rank}</span>
+            <span class="score-badge ${cls}">${sc}</span>
+          </div>
+          <p class="hyp-text">${h.hypothesis_text}</p>
+          <div class="metrics">
+            <div class="metric">
+              <span class="metric-label">Novelty</span>
+              <span class="metric-bar"><span style="width:${(h.novelty||0)*100}%"></span></span>
+              <span class="metric-val">${typeof h.novelty === "number" ? h.novelty.toFixed(2) : h.novelty}</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Evidence</span>
+              <span class="metric-bar"><span style="width:${(h.evidence||0)*100}%"></span></span>
+              <span class="metric-val">${typeof h.evidence === "number" ? h.evidence.toFixed(2) : h.evidence}</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Feasibility</span>
+              <span class="metric-bar"><span style="width:${(h.feasibility||0)*100}%"></span></span>
+              <span class="metric-val">${typeof h.feasibility === "number" ? h.feasibility.toFixed(2) : h.feasibility}</span>
+            </div>
+          </div>
+          ${h.critique ? `<div class="critique">💬 ${h.critique}</div>` : ""}
+        </div>`;
+      });
+
+      root.innerHTML = html;
+
+      // Download links (served from /download route)
+      if (data.md_path) {
+        const a = document.getElementById("dl-md");
+        a.href = "/download?path=" + encodeURIComponent(data.md_path);
+        a.style.display = "inline-block";
+      }
+      if (data.json_path) {
+        const a = document.getElementById("dl-json");
+        a.href = "/download?path=" + encodeURIComponent(data.json_path);
+        a.style.display = "inline-block";
+      }
+    }
+  </script>
+</body>
+</html>

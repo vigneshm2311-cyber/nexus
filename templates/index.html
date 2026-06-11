@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NEXUS — Research Intelligence</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+  <div class="container">
+
+    <header>
+      <div class="logo">⬡ NEXUS</div>
+      <p class="tagline">Multi-agent research intelligence platform</p>
+    </header>
+
+    {% if error %}
+    <div class="alert">{{ error }}</div>
+    {% endif %}
+
+    <div class="card">
+      <form action="/run" method="POST">
+
+        <div class="field">
+          <label for="goal">Research Goal</label>
+          <input
+            type="text"
+            id="goal"
+            name="goal"
+            placeholder="e.g. Bakuchiol for anti-ageing?"
+            autocomplete="off"
+            required
+          />
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="rounds">Rounds <span class="hint">1–5</span></label>
+            <input type="number" id="rounds" name="rounds" value="3" min="1" max="5"/>
+          </div>
+          <div class="field">
+            <label for="hypotheses">Hypotheses / round <span class="hint">1–10</span></label>
+            <input type="number" id="hypotheses" name="hypotheses" value="5" min="1" max="10"/>
+          </div>
+          <div class="field">
+            <label for="papers">Papers / hypothesis <span class="hint">1–10</span></label>
+            <input type="number" id="papers" name="papers" value="5" min="1" max="10"/>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-primary">▶ Run Research</button>
+
+      </form>
+    </div>
+
+    <footer>NEXUS v3 · Ollama · Local</footer>
+
+  </div>
+</body>
+</html>

@@ -1,0 +1,105 @@
+import sys
+import json
+import queue
+import threading
+from flask import Flask, render_template, request, Response, stream_with_context
+from nexus.config import ResearchConfig
+from nexus.conductor import run
+from nexus.output import generate
+
+app = Flask(__name__)
+
+# ── Global progress queue (one run at a time for now) ────────────────────────
+_progress_queue = queue.Queue()
+
+class QueueLogger:
+    """Intercepts print() output and pushes lines to the SSE queue."""
+    def __init__(self, q):
+        self.q = q
+        self._original = sys.stdout
+
+    def write(self, msg):
+        self._original.write(msg)
+        if msg.strip():
+            self.q.put({"type": "log", "text": msg.rstrip()})
+
+    def flush(self):
+        self._original.flush()
+
+def run_pipeline(goal, config):
+    """Runs NEXUS in a background thread, pushes results to queue when done."""
+    try:
+        result = run(goal, config)
+        md_path, json_path = generate(result, config)
+        _progress_queue.put({
+            "type": "done",
+            "ranked": result["ranked"],
+            "md_path": md_path,
+            "json_path": json_path,
+        })
+    except Exception as e:
+        _progress_queue.put({"type": "error", "text": str(e)})
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/run", methods=["POST"])
+def run_research():
+    goal       = request.form.get("goal", "").strip()
+    rounds     = int(request.form.get("rounds", 3))
+    hypotheses = int(request.form.get("hypotheses", 5))
+    papers     = int(request.form.get("papers", 5))
+
+    if not goal:
+        return render_template("index.html", error="Please enter a research goal.")
+
+    config = ResearchConfig()
+    config.max_rounds            = rounds
+    config.hypotheses_per_round  = hypotheses
+    config.papers_per_hypothesis = papers
+    config.validate()
+
+    # Redirect stdout so NEXUS print() calls feed the SSE queue
+    sys.stdout = QueueLogger(_progress_queue)
+
+    thread = threading.Thread(target=run_pipeline, args=(goal, config), daemon=True)
+    thread.start()
+
+    return render_template("progress.html", goal=goal)
+
+@app.route("/stream")
+def stream():
+    def event_stream():
+        while True:
+            try:
+                msg = _progress_queue.get(timeout=120)
+                yield f"data: {json.dumps(msg)}\n\n"
+                if msg["type"] in ("done", "error"):
+                    sys.stdout = sys.__stdout__   # restore stdout
+                    break
+            except queue.Empty:
+                yield f"data: {json.dumps({'type': 'log', 'text': '[timeout] No activity for 2 minutes.'})}\n\n"
+                break
+
+    return Response(stream_with_context(event_stream()),
+                    mimetype="text/event-stream")
+
+@app.route("/results")
+def results():
+    # Results are passed via query param as JSON index into last run
+    # (we store last result in app context for simplicity)
+    return render_template("results.html")
+
+
+@app.route("/download")
+def download():
+    from flask import send_file, abort
+    import os
+    path = request.args.get("path", "")
+    if not path or not os.path.exists(path):
+        abort(404)
+    return send_file(path, as_attachment=True)
+
+if __name__ == "__main__":
+    app.run(host='127.0.0.1', port=8080, debug=False, threaded=True)
