@@ -1,6 +1,9 @@
+import json
+import re
+
 from nexus.agents.base import BaseAgent
 
-SYSTEM = "You are a scientific gap analyst. Be specific and actionable."
+SYSTEM = "You are a scientific gap analyst. Be specific and actionable. Respond only with valid JSON — no preamble, no markdown fences, no explanation."
 
 GAP_PROMPT = """You are analyzing a set of research hypotheses and their critiques
 about the following goal: {goal}
@@ -11,25 +14,25 @@ Ranked hypotheses with scores and critiques:
 Low-evidence hypotheses (evidence score < 0.4) — these signal genuine gaps:
 {low_evidence_block}
 
-Identify the 5 most important unanswered questions (research gaps) in this field.
+Identify the 3 most important unanswered questions (research gaps) in this field.
 For each gap:
 - It must be a specific, answerable research question
 - It must be directly relevant to the research goal
 - It must NOT be answered by existing hypotheses above
+- Keep each field to one short sentence — be concise
 
-Output format — exactly 5 blocks:
-Gap: <specific research question>
-Why it matters: <one sentence on scientific importance>
-Suggested approach: <one sentence on how to investigate it>
-Priority: <high / medium / low>
+Respond with ONLY a JSON array of exactly 3 objects, in this exact shape:
+[
+  {{
+    "gap": "<specific research question>",
+    "why": "<one short sentence on scientific importance>",
+    "approach": "<one short sentence on how to investigate it>",
+    "priority": "high"
+  }}
+]
 
----
-Gap: <specific research question>
-Why it matters: <one sentence>
-Suggested approach: <one sentence>
-Priority: <high / medium / low>
-
-(repeat for all 5 gaps)
+priority must be exactly one of: "high", "medium", "low".
+Do not include any text before or after the JSON array.
 """
 
 class GapDetectorAgent(BaseAgent):
@@ -76,28 +79,119 @@ class GapDetectorAgent(BaseAgent):
             "_summary": f"Identified {len(gaps)} research gaps"
         }
 
+
+def _repair_json(raw: str) -> str:
+    """Strip markdown fences, isolate the JSON array, and auto-close
+    truncated arrays/objects when the model stops generating mid-output."""
+    text = raw.strip()
+
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+
+    start = text.find("[")
+    if start == -1:
+        return text  # no array start at all — let json.loads fail naturally
+
+    end = text.rfind("]")
+    if end != -1 and end > start:
+        # Array appears closed — just isolate it
+        text = text[start:end + 1]
+    else:
+        # No closing bracket found — the model was cut off mid-array.
+        # Truncate back to the last fully-closed object and close the array.
+        body = text[start:]
+        last_close = body.rfind("}")
+        if last_close == -1:
+            return text  # nothing usable, let json.loads fail naturally
+        text = "[" + body[1:last_close + 1] + "]"
+
+    # Remove trailing commas before ] or }
+    text = re.sub(r",\s*([\]}])", r"\1", text)
+
+    return text
+
+
 def _parse_gaps(raw: str) -> list:
+    """Primary parser: JSON (with truncation repair). Falls back to a
+    tolerant line-based parser if the model didn't return valid JSON
+    despite instructions."""
+    cleaned = _repair_json(raw)
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            gaps = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                gap_text = item.get("gap", "").strip()
+                if not gap_text:
+                    continue
+                gaps.append({
+                    "gap": gap_text,
+                    "why": item.get("why", "").strip(),
+                    "approach": item.get("approach", "").strip(),
+                    "priority": str(item.get("priority", "medium")).strip().lower(),
+                })
+            if gaps:
+                return gaps
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        pass
+
+    return _parse_gaps_fallback(raw)
+
+
+def _parse_gaps_fallback(raw: str) -> list:
+    """Tolerant line-based parser. Handles both:
+    - quoted JSON-style keys:  "gap": "...",
+    - plain text keys:         Gap: ...
+    Also tolerant of numbered/bulleted lines and markdown bold.
+    """
     gaps = []
-    blocks = raw.strip().split("---")
-    for block in blocks:
-        block = block.strip()
-        if not block:
+    entry = {}
+
+    line_pattern = re.compile(
+        r'^\s*(?:[-*\d.)]+\s*)?\*{0,2}"?(gap|why|why it matters|approach|suggested approach|priority)"?\*{0,2}\s*:\s*"?(.*?)"?,?\s*$',
+        re.IGNORECASE,
+    )
+
+    key_map = {
+        "gap": "gap",
+        "why": "why",
+        "why it matters": "why",
+        "approach": "approach",
+        "suggested approach": "approach",
+        "priority": "priority",
+    }
+
+    for raw_line in raw.splitlines():
+        match = line_pattern.match(raw_line.strip())
+        if not match:
             continue
-        lines = block.splitlines()
-        entry = {}
-        for line in lines:
-            line = line.strip()
-            if line.lower().startswith("gap:"):
-                entry["gap"] = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("why it matters:"):
-                entry["why"] = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("suggested approach:"):
-                entry["approach"] = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("priority:"):
-                entry["priority"] = line.split(":", 1)[1].strip().lower()
-        if entry.get("gap"):
-            gaps.append(entry)
+        raw_key, value = match.group(1).lower(), match.group(2).strip()
+        key = key_map.get(raw_key)
+        if not key:
+            continue
+
+        if key == "gap":
+            if entry.get("gap"):
+                gaps.append(entry)
+            entry = {"gap": value}
+        else:
+            entry[key] = value.lower() if key == "priority" else value
+
+    if entry.get("gap"):
+        gaps.append(entry)
+
+    for gap in gaps:
+        gap.setdefault("why", "")
+        gap.setdefault("approach", "")
+        gap.setdefault("priority", "medium")
+
     return gaps
+
 
 def _score_gaps(gaps: list, low_evidence: list) -> list:
     priority_map = {"high": 3, "medium": 2, "low": 1}

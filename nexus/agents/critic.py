@@ -8,7 +8,7 @@ PROMPT = """Hypothesis: {hypothesis}
 Supporting literature ({n_papers} papers found):
 {paper_list}
 
-Critically evaluate this hypothesis. Address:
+Critically evaluate this hypothesis based on what these papers actually report. Address:
 1. Scientific plausibility
 2. Novelty (is this already well established?)
 3. Testability (can it be experimentally validated?)
@@ -26,9 +26,7 @@ class CriticAgent(BaseAgent):
 
         for h in hypotheses:
             papers = get_papers_for_hypothesis(self.conn, h["id"])
-            paper_list = "\n".join(
-                f"- {p['title']}" for p in papers[:5]
-            ) or "No papers found."
+            paper_list = _format_papers(papers[:5])
 
             prompt = PROMPT.format(
                 hypothesis=h["text"],
@@ -48,3 +46,27 @@ class CriticAgent(BaseAgent):
             "critiques": critiques,
             "_summary": f"Critiqued {len(critiques)} hypotheses"
         }
+
+
+def _row_get(row, key, default=""):
+    """Safe field access that works for both sqlite3.Row and plain dicts."""
+    try:
+        value = row[key]
+        return value if value is not None else default
+    except (IndexError, KeyError):
+        return default
+
+
+def _format_papers(papers: list) -> str:
+    if not papers:
+        return "No papers found."
+
+    blocks = []
+    for p in papers:
+        title    = str(_row_get(p, "title", "")).strip()
+        abstract = str(_row_get(p, "abstract", "")).strip()
+        if abstract:
+            blocks.append(f"- {title}\n  Abstract: {abstract}")
+        else:
+            blocks.append(f"- {title}\n  (no abstract available)")
+    return "\n\n".join(blocks)

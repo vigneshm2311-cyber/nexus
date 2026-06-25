@@ -1,14 +1,12 @@
 import uuid
-import time
 import re
-import requests
 import xml.etree.ElementTree as ET
+import requests
 from nexus.agents.base import BaseAgent
 from nexus.db import insert_paper
 
 PUBMED_SEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 PUBMED_FETCH  = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-SEMANTIC_URL  = "https://api.semanticscholar.org/graph/v1/paper/search"
 
 ADJACENT_FIELDS = [
     "materials science",
@@ -37,18 +35,17 @@ Adjacent fields to draw from: {fields}
 For each of 3 adjacent fields, find a structurally similar mechanism and explain
 how it could inspire a new hypothesis about: {goal}
 
-Output exactly 3 blocks in this format (no markdown bold, no --- separators):
-Field: <field name>
-Analogy: <mechanism in that field that mirrors the core mechanism>
-New hypothesis: <one testable sentence applying this analogy to the research goal>
+Respond with ONLY a JSON array of exactly 3 objects, in this exact shape:
+[
+  {{
+    "field": "<field name>",
+    "analogy": "<mechanism in that field that mirrors the core mechanism, one sentence>",
+    "new_hypothesis": "<one testable sentence applying this analogy to the research goal>"
+  }}
+]
 
-Field: <field name>
-Analogy: <mechanism in that field>
-New hypothesis: <one testable sentence>
-
-Field: <field name>
-Analogy: <mechanism in that field>
-New hypothesis: <one testable sentence>
+Keep each field to one short sentence — be concise.
+Do not include any text before or after the JSON array.
 """
 
 SEARCH_PROMPT = """Given this research goal and adjacent field, write a 5-word PubMed search query
@@ -99,8 +96,6 @@ class AnalogyBridgeAgent(BaseAgent):
             print(f"        Analogy search [{field}]: {query}")
 
             fetched = _fetch_pubmed(query, n=2)
-            if not fetched:
-                fetched = _fetch_semantic_safe(query, n=2)
 
             for p in fetched:
                 p_id       = str(uuid.uuid4())
@@ -128,13 +123,75 @@ class AnalogyBridgeAgent(BaseAgent):
         )
         return raw.strip()
 
+
+def _repair_json(raw: str) -> str:
+    """Strip markdown fences, isolate the JSON array, and auto-close
+    truncated arrays/objects when the model stops generating mid-output."""
+    text = raw.strip()
+
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+
+    start = text.find("[")
+    if start == -1:
+        return text
+
+    end = text.rfind("]")
+    if end != -1 and end > start:
+        text = text[start:end + 1]
+    else:
+        body = text[start:]
+        last_close = body.rfind("}")
+        if last_close == -1:
+            return text
+        text = "[" + body[1:last_close + 1] + "]"
+
+    text = re.sub(r",\s*([\]}])", r"\1", text)
+    return text
+
+
 def _clean_label(text: str) -> str:
     return re.sub(r"[*_`#]", "", text).strip()
 
+
 def _parse_analogies(raw: str) -> list:
-    analogies  = []
-    current    = {}
-    key_map    = {
+    """Primary parser: JSON (with truncation repair). Falls back to a
+    tolerant line-based parser if the model didn't return valid JSON
+    despite instructions."""
+    import json
+
+    cleaned = _repair_json(raw)
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            analogies = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                field = item.get("field", "").strip()
+                if not field:
+                    continue
+                analogies.append({
+                    "field": field,
+                    "analogy": item.get("analogy", "").strip(),
+                    "new_hypothesis": item.get("new_hypothesis", "").strip(),
+                })
+            if analogies:
+                return analogies
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        pass
+
+    return _parse_analogies_fallback(raw)
+
+
+def _parse_analogies_fallback(raw: str) -> list:
+    """Tolerant line-based parser for non-JSON output. No longer requires
+    a blank line between blocks — instead starts a new block whenever a
+    'field' key repeats."""
+    analogies = []
+    current   = {}
+    key_map = {
         "field"         : "field",
         "analogy"       : "analogy",
         "new hypothesis": "new_hypothesis",
@@ -143,9 +200,6 @@ def _parse_analogies(raw: str) -> list:
     for line in raw.splitlines():
         line = line.strip()
         if not line:
-            if len(current) == 3:
-                analogies.append(current)
-                current = {}
             continue
 
         cleaned = _clean_label(line)
@@ -154,6 +208,10 @@ def _parse_analogies(raw: str) -> list:
             pattern = re.compile(rf"^{prefix}\s*:", re.IGNORECASE)
             if pattern.match(cleaned):
                 value = pattern.sub("", cleaned).strip()
+                if key == "field" and current.get("field"):
+                    # New block started — commit the previous one
+                    analogies.append(current)
+                    current = {}
                 current[key] = value
                 matched = True
                 break
@@ -162,10 +220,15 @@ def _parse_analogies(raw: str) -> list:
             last_key = list(current.keys())[-1]
             current[last_key] += " " + cleaned
 
-    if len(current) == 3:
+    if current.get("field"):
         analogies.append(current)
 
+    for ana in analogies:
+        ana.setdefault("analogy", "")
+        ana.setdefault("new_hypothesis", "")
+
     return analogies
+
 
 def _fetch_pubmed(query: str, n: int) -> list:
     try:
@@ -187,34 +250,6 @@ def _fetch_pubmed(query: str, n: int) -> list:
         print(f"        [pubmed error] {e}")
         return []
 
-def _fetch_semantic_safe(query: str, n: int, retries: int = 3) -> list:
-    for attempt in range(retries):
-        try:
-            resp = requests.get(SEMANTIC_URL, params={
-                "query": query, "limit": n,
-                "fields": "title,abstract,externalIds"
-            }, timeout=10)
-            if resp.status_code == 429:
-                wait = 2 ** attempt
-                print(f"        [semantic 429] retrying in {wait}s...")
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            papers = []
-            for item in resp.json().get("data", []):
-                pmid     = item.get("externalIds", {}).get("PubMed", f"ss_{item.get('paperId','')}")
-                title    = item.get("title", "")
-                abstract = item.get("abstract", "") or ""
-                if title:
-                    papers.append({
-                        "pmid": str(pmid), "title": title,
-                        "abstract": abstract, "source": "semantic_scholar"
-                    })
-            return papers
-        except Exception as e:
-            print(f"        [semantic error] {e}")
-            return []
-    return []
 
 def _parse_pubmed_xml(xml_text: str) -> list:
     papers = []
