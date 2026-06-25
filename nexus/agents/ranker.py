@@ -18,7 +18,16 @@ Papers found: {n_papers}
 
 Scoring guide:
 - Novelty: 1.0 = completely new idea, 0.0 = textbook knowledge
-- Evidence: 1.0 = many strong papers support it, 0.0 = no literature
+- Evidence: judge RELEVANCE and STRENGTH of support, not just paper count.
+  1.0 = multiple papers directly support this specific mechanism.
+  0.5 = papers exist but are only tangentially related, or critique notes
+        a weak/unclear link between the papers and the hypothesis.
+  0.0 = no literature, OR critique states the papers do not actually
+        support this hypothesis (e.g. "lacks empirical evidence",
+        "no causal link", "outlandish", "speculative", "untested").
+  A high paper count with an unsupportive critique should score LOW,
+  not high — read the critique's plausibility and weaknesses lines
+  before assigning this score.
 - Feasibility: 1.0 = testable with standard lab methods, 0.0 = untestable
 """
 

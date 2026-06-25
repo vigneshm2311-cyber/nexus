@@ -119,8 +119,10 @@ def run(goal: str, config: ResearchConfig = None) -> dict:
         if round_num < config.max_rounds:
             print(f"  [7/7] Evolver agent...")
             evo_result = evolver.run(session_id, round_num, {
-                "ranked"  : final_ranked,
-                "_summary": f"round {round_num} evolver"
+                "ranked"   : final_ranked,
+                "gaps"     : final_gaps,
+                "analogies": final_analogies,
+                "_summary" : f"round {round_num} evolver"
             })
             seeds = evo_result["seed_texts"]
             print(f"        {evo_result['_summary']}")
