@@ -99,8 +99,12 @@ def get_hypotheses_by_round(conn, session_id, round_num):
     ).fetchall()
 
 def get_papers_for_hypothesis(conn, hypothesis_id):
+    # Ordered by relevance (highest first) so any caller that slices the
+    # result — e.g. Critic taking papers[:5] — gets the most relevant
+    # papers, not just whichever were inserted first (previously this had
+    # no ORDER BY at all, so it defaulted to insertion/source order).
     return conn.execute(
-        "SELECT * FROM papers WHERE hypothesis_id=?",
+        "SELECT * FROM papers WHERE hypothesis_id=? ORDER BY relevance DESC",
         (hypothesis_id,)
     ).fetchall()
 

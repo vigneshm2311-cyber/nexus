@@ -1,5 +1,6 @@
 import uuid
 import asyncio
+import re
 import httpx
 from nexus.agents.base import BaseAgent
 from nexus.db import insert_paper, get_papers_for_hypothesis
@@ -18,6 +19,9 @@ Output: a single line of comma-separated terms only. No explanation.
 Example output: BRCA1, homologous recombination, breast cancer, metastasis, DNA repair
 """
 
+MIN_RELEVANCE = 0.15
+
+
 def _build_query(hypothesis_text: str, llm) -> str:
     try:
         prompt = ENTITY_PROMPT.format(hypothesis=hypothesis_text)
@@ -32,12 +36,14 @@ def _build_query(hypothesis_text: str, llm) -> str:
     core  = [w.strip(".,;:()") for w in words if len(w) > 5][:6]
     return clean_query(" ".join(core))
 
+
 def _title_similarity(t1: str, t2: str) -> float:
     w1 = set(t1.lower().split())
     w2 = set(t2.lower().split())
     if not w1 or not w2:
         return 0.0
     return len(w1 & w2) / len(w1 | w2)
+
 
 def _dedup(papers: list, threshold: float = 0.6) -> list:
     deduped = []
@@ -47,6 +53,34 @@ def _dedup(papers: list, threshold: float = 0.6) -> list:
             deduped.append(p)
     return deduped
 
+
+def _query_terms(query: str) -> list:
+    return [t.lower() for t in re.split(r"\s+", query.strip()) if len(t) > 2]
+
+
+def _score_relevance(query: str, title: str, abstract: str) -> float:
+    terms = _query_terms(query)
+    if not terms:
+        return MIN_RELEVANCE
+
+    title_lower    = (title or "").lower()
+    abstract_lower = (abstract or "").lower()
+
+    matched_weight = 0.0
+    for term in terms:
+        in_title    = term in title_lower
+        in_abstract = term in abstract_lower
+        if in_title:
+            matched_weight += 1.0
+        elif in_abstract:
+            matched_weight += 0.5
+
+    max_weight = len(terms) * 1.0
+    raw_score  = matched_weight / max_weight if max_weight else 0.0
+
+    return round(max(MIN_RELEVANCE, min(1.0, raw_score)), 4)
+
+
 async def _safe_fetch(name: str, coro) -> list:
     try:
         result = await coro
@@ -54,6 +88,7 @@ async def _safe_fetch(name: str, coro) -> list:
     except Exception as e:
         print(f"        [{name} error] {e}")
         return []
+
 
 async def _fetch_for_query(client: httpx.AsyncClient, query: str, n: int) -> list:
     batches = await asyncio.gather(
@@ -67,7 +102,12 @@ async def _fetch_for_query(client: httpx.AsyncClient, query: str, n: int) -> lis
     papers = []
     for batch in batches:
         papers.extend(batch)
+
+    for p in papers:
+        p["relevance"] = _score_relevance(query, p.get("title", ""), p.get("abstract", ""))
+
     return _dedup(papers)
+
 
 async def _fetch_all_hypotheses(queries: list, n: int) -> list:
     async with httpx.AsyncClient() as client:
@@ -76,6 +116,7 @@ async def _fetch_all_hypotheses(queries: list, n: int) -> list:
             result = await _fetch_for_query(client, q, n)
             results.append(result)
     return results
+
 
 class FetcherAgent(BaseAgent):
     name = "fetcher"
@@ -126,7 +167,7 @@ class FetcherAgent(BaseAgent):
                 insert_paper(
                     self.conn, p_id, h["id"], session_id,
                     p["pmid"], p["title"], p["abstract"],
-                    p["source"], p.get("relevance", 0.5)
+                    p["source"], p.get("relevance", MIN_RELEVANCE)
                 )
                 all_papers.append({**p, "hypothesis_id": h["id"]})
                 source_counts[p["source"]] = source_counts.get(p["source"], 0) + 1
