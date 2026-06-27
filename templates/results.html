@@ -44,6 +44,93 @@
       return "score-low";
     }
 
+    function escapeHtml(str) {
+      const div = document.createElement("div");
+      div.textContent = str || "";
+      return div.innerHTML;
+    }
+
+    function renderPapers(papers) {
+      if (!papers || papers.length === 0) {
+        return '<div class="papers-empty">No supporting literature found.</div>';
+      }
+
+      const items = papers.map(p => {
+        const title  = escapeHtml(p.title || "Untitled");
+        const source = escapeHtml(p.source || "");
+        if (p.url) {
+          return `<li><a href="${p.url}" target="_blank" rel="noopener noreferrer">${title}</a> <span class="paper-source">(${source})</span></li>`;
+        }
+        return `<li>${title} <span class="paper-source">(${source})</span></li>`;
+      }).join("");
+
+      return `
+        <details class="papers-disclosure">
+          <summary>📄 Supporting literature (${papers.length} papers)</summary>
+          <ul class="papers-list">${items}</ul>
+        </details>`;
+    }
+
+    function renderAnalogies(analogies) {
+      if (!analogies || !analogies.analogies || analogies.analogies.length === 0) {
+        return "";
+      }
+
+      const mechanism = escapeHtml(analogies.mechanism || "");
+      const cards = analogies.analogies.map(a => {
+        const field    = escapeHtml(a.field || "");
+        const analogy  = escapeHtml(a.analogy || "");
+        const inspired  = escapeHtml(a.new_hypothesis || "");
+        let papersHtml = "";
+        if (a.papers && a.papers.length > 0) {
+          const items = a.papers.map(p => `<li>${escapeHtml(p)}</li>`).join("");
+          papersHtml = `<ul class="analogy-papers">${items}</ul>`;
+        }
+        return `
+          <div class="analogy-card">
+            <div class="analogy-field">${field}</div>
+            <p class="analogy-text"><strong>Analogy:</strong> ${analogy}</p>
+            <p class="analogy-text"><strong>Inspired hypothesis:</strong> ${inspired}</p>
+            ${papersHtml}
+          </div>`;
+      }).join("");
+
+      return `
+        <section class="section-block">
+          <h2 class="section-title">🔗 Analogies from Adjacent Fields</h2>
+          ${mechanism ? `<p class="section-subtext"><strong>Core mechanism:</strong> ${mechanism}</p>` : ""}
+          <div class="analogy-grid">${cards}</div>
+        </section>`;
+    }
+
+    function renderGaps(gaps) {
+      const gapList = (gaps && gaps.gaps) ? gaps.gaps : (Array.isArray(gaps) ? gaps : []);
+      if (!gapList || gapList.length === 0) {
+        return "";
+      }
+
+      const items = gapList.map((g, i) => {
+        const priority = (g.priority || "medium").toUpperCase();
+        const priorityClass = "gap-priority-" + (g.priority || "medium").toLowerCase();
+        return `
+          <div class="gap-card">
+            <div class="gap-header">
+              <span class="gap-num">Gap ${i + 1}</span>
+              <span class="gap-priority ${priorityClass}">${priority}</span>
+            </div>
+            <p class="gap-question">${escapeHtml(g.gap || "")}</p>
+            <p class="gap-detail"><strong>Why it matters:</strong> ${escapeHtml(g.why || "")}</p>
+            <p class="gap-detail"><strong>Suggested approach:</strong> ${escapeHtml(g.approach || "")}</p>
+          </div>`;
+      }).join("");
+
+      return `
+        <section class="section-block">
+          <h2 class="section-title">🧭 Research Gaps</h2>
+          <div class="gap-grid">${items}</div>
+        </section>`;
+    }
+
     function renderResults(data) {
       const root = document.getElementById("results-root");
       let html = "";
@@ -59,7 +146,7 @@
             <span class="rank">#${rank}</span>
             <span class="score-badge ${cls}">${sc}</span>
           </div>
-          <p class="hyp-text">${h.hypothesis_text}</p>
+          <p class="hyp-text">${escapeHtml(h.hypothesis_text)}</p>
           <div class="metrics">
             <div class="metric">
               <span class="metric-label">Novelty</span>
@@ -77,13 +164,16 @@
               <span class="metric-val">${typeof h.feasibility === "number" ? h.feasibility.toFixed(2) : h.feasibility}</span>
             </div>
           </div>
-          ${h.critique ? `<div class="critique">💬 ${h.critique}</div>` : ""}
+          ${h.critique ? `<div class="critique">💬 ${escapeHtml(h.critique)}</div>` : ""}
+          ${renderPapers(h.papers)}
         </div>`;
       });
 
+      html += renderAnalogies(data.analogies);
+      html += renderGaps(data.gaps);
+
       root.innerHTML = html;
 
-      // Download links (served from /download route)
       if (data.md_path) {
         const a = document.getElementById("dl-md");
         a.href = "/download?path=" + encodeURIComponent(data.md_path);
