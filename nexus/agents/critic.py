@@ -17,6 +17,15 @@ Critically evaluate this hypothesis based on what these papers actually report. 
 3. Testability (can it be experimentally validated?)
 4. Weaknesses or confounders
 
+IMPORTANT: If the papers above do NOT actually address this hypothesis's
+specific claim — e.g. they're about a different topic, mechanism, or
+compound entirely — you MUST say so explicitly (e.g. "None of the cited
+papers address [the specific claim]; they discuss [unrelated topic]
+instead"). Do NOT comment on the papers' general scientific quality or
+merit if they are not actually relevant to THIS hypothesis. A disconnect
+between the hypothesis and its evidence is itself a critical weakness to
+report, not something to write around.
+
 Respond in exactly 4 lines, one per point above. Be blunt.
 """
 

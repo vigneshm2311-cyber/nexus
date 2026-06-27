@@ -16,7 +16,7 @@ class ResearchConfig:
     # Research loop
     max_rounds: int = 3
     hypotheses_per_round: int = 5
-    top_k_evolve: int = 2
+    top_k_evolve: int = 3
     papers_per_hypothesis: int = 3
 
     # Storage
