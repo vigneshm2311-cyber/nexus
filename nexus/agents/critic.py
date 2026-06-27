@@ -54,9 +54,9 @@ split the response into multiple separate arrays.
 Do not include any text before or after the JSON array.
 """
 
-MAX_PAPERS_TO_SCORE = 10
-ABSTRACT_SCORING_CHAR_CAP = 400
-TOP_N_FOR_CRITIQUE = 5
+MAX_PAPERS_TO_SCORE = 18
+ABSTRACT_SCORING_CHAR_CAP = 250
+TOP_N_FOR_CRITIQUE = 8
 
 
 class CriticAgent(BaseAgent):
