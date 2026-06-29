@@ -89,6 +89,7 @@ def run_research():
     rounds     = int(request.form.get("rounds", 3))
     hypotheses = int(request.form.get("hypotheses", 5))
     papers     = int(request.form.get("papers", 5))
+    speed      = request.form.get("speed", "quality")
 
     if not goal:
         return render_template("index.html", error="Please enter a research goal.")
@@ -97,6 +98,16 @@ def run_research():
     config.max_rounds            = rounds
     config.hypotheses_per_round  = hypotheses
     config.papers_per_hypothesis = papers
+
+    # Speed toggle overrides the .env default model for this run only —
+    # "fast" trades accuracy for speed (llama3.2), "quality" is the
+    # slower, more reliable default (mistral). See model_comparison.py
+    # for the measurements behind this choice.
+    if speed == "fast":
+        config.ollama_model = "llama3.2"
+    else:
+        config.ollama_model = "mistral"
+
     config.validate()
 
     # Redirect stdout so NEXUS print() calls feed the SSE queue
@@ -105,7 +116,7 @@ def run_research():
     thread = threading.Thread(target=run_pipeline, args=(goal, config), daemon=True)
     thread.start()
 
-    return render_template("progress.html", goal=goal)
+    return render_template("progress.html", goal=goal, model=config.ollama_model)
 
 @app.route("/stream")
 def stream():

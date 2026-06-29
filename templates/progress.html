@@ -15,7 +15,7 @@
     </header>
 
     <div class="card">
-      <div class="goal-badge">🔬 {{ goal }}</div>
+      <div class="goal-badge">🔬 {{ goal }} <span class="model-badge">{{ model }}</span></div>
 
       <div class="progress-header">
         <span class="pulse"></span>
@@ -49,7 +49,6 @@
       const msg = JSON.parse(e.data);
 
       if (msg.type === "log") {
-        // Colour-code by content
         let cls = "";
         if (msg.text.includes("Round"))       cls = "log-round";
         else if (msg.text.includes("agent"))  cls = "log-agent";
@@ -66,7 +65,6 @@
         results = msg;
         statusTxt.textContent = "✓ Pipeline complete — rendering results…";
         appendLog("✓ Done. Building results page…", "log-done");
-        // Store results in sessionStorage and redirect
         sessionStorage.setItem("nexus_results", JSON.stringify(msg));
         setTimeout(() => { window.location.href = "/results"; }, 800);
       }

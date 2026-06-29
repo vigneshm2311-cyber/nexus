@@ -48,6 +48,22 @@
           </div>
         </div>
 
+        <div class="field">
+          <label>Speed <span class="hint">model used for this run</span></label>
+          <div class="speed-toggle">
+            <label class="speed-option">
+              <input type="radio" name="speed" value="fast"/>
+              <span class="speed-label">⚡ Fast</span>
+              <span class="speed-sub">llama3.2 — quicker, less precise</span>
+            </label>
+            <label class="speed-option">
+              <input type="radio" name="speed" value="quality" checked/>
+              <span class="speed-label">🎯 Quality</span>
+              <span class="speed-sub">mistral — slower, more reliable</span>
+            </label>
+          </div>
+        </div>
+
         <button type="submit" class="btn-primary">▶ Run Research</button>
 
       </form>

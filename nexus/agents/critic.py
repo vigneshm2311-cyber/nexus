@@ -63,7 +63,16 @@ split the response into multiple separate arrays.
 Do not include any text before or after the JSON array.
 """
 
-MAX_PAPERS_TO_SCORE = 18
+# Papers are now scored in BATCHES rather than truncating to a fixed
+# candidate count up front. Root problem this fixes: previously only the
+# first MAX_PAPERS_TO_SCORE papers (by Fetcher's crude keyword-overlap
+# relevance) ever reached the LLM relevance scorer — a genuinely strong
+# paper using different terminology than the search query could be cut
+# before the smarter LLM scorer ever saw it. Now every fetched paper (up
+# to a sane overall ceiling) gets scored by the LLM, just in chunks.
+BATCH_SIZE = 10
+MAX_TOTAL_PAPERS_SCORED = 40  # sane ceiling so a 100-paper hypothesis
+                              # doesn't trigger 10 sequential LLM calls
 ABSTRACT_SCORING_CHAR_CAP = 250
 TOP_N_FOR_CRITIQUE = 8
 
@@ -100,21 +109,44 @@ class CriticAgent(BaseAgent):
         }
 
     def _select_top_papers(self, hypothesis_text: str, papers: list) -> list:
+        """Selects the most relevant papers for this specific hypothesis
+        by LLM-scoring EVERY fetched paper (up to MAX_TOTAL_PAPERS_SCORED),
+        in batches, rather than pre-truncating to a fixed candidate count
+        before scoring. Falls back to Fetcher's existing relevance
+        ordering if every batch fails to parse — this is an enrichment
+        step, not a hard dependency."""
         if not papers:
             return []
 
-        candidates = list(papers)[:MAX_PAPERS_TO_SCORE]
+        candidates = list(papers)[:MAX_TOTAL_PAPERS_SCORED]
+        batches = [
+            candidates[i:i + BATCH_SIZE]
+            for i in range(0, len(candidates), BATCH_SIZE)
+        ]
 
-        try:
-            scores = self._score_relevance_llm(hypothesis_text, candidates)
-        except Exception as e:
-            print(f"        [critic relevance error] {e}")
-            scores = None
+        all_scores = []   # parallel to `candidates`, filled batch by batch
+        any_batch_succeeded = False
 
-        if not scores:
+        for batch in batches:
+            try:
+                batch_scores = self._score_relevance_llm(hypothesis_text, batch)
+            except Exception as e:
+                print(f"        [critic relevance error] {e}")
+                batch_scores = None
+
+            if batch_scores:
+                all_scores.extend(batch_scores)
+                any_batch_succeeded = True
+            else:
+                # This batch failed — give its papers a neutral score so
+                # they can still be selected if nothing else scored higher,
+                # rather than being silently dropped from consideration.
+                all_scores.extend([0.3] * len(batch))
+
+        if not any_batch_succeeded:
             return candidates[:TOP_N_FOR_CRITIQUE]
 
-        scored = list(zip(candidates, scores))
+        scored = list(zip(candidates, all_scores))
         scored.sort(key=lambda pair: pair[1], reverse=True)
         return [p for p, _ in scored[:TOP_N_FOR_CRITIQUE]]
 
@@ -137,6 +169,7 @@ class CriticAgent(BaseAgent):
 
 
 def _row_get(row, key, default=""):
+    """Safe field access that works for both sqlite3.Row and plain dicts."""
     try:
         value = row[key]
         return value if value is not None else default
@@ -157,27 +190,6 @@ def _format_papers(papers: list) -> str:
         else:
             blocks.append(f"- {title}\n  (no abstract available)")
     return "\n\n".join(blocks)
-
-
-def _extract_all_json_arrays(text: str) -> list:
-    """Finds every top-level [...] array in the text, even if the model
-    returned multiple separate arrays back to back (observed with mistral
-    on the relevance-scoring prompt: it split a 4-item array into two
-    separate 2-item arrays). Returns a list of raw array substrings."""
-    arrays = []
-    depth = 0
-    start = None
-    for i, ch in enumerate(text):
-        if ch == "[":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == "]":
-            depth -= 1
-            if depth == 0 and start is not None:
-                arrays.append(text[start:i + 1])
-                start = None
-    return arrays
 
 
 def _repair_json(raw: str) -> str:
@@ -206,24 +218,34 @@ def _repair_json(raw: str) -> str:
     return text
 
 
+def _extract_all_json_arrays(text: str) -> list:
+    """Finds every top-level [...] array in the text, even if the model
+    returned multiple separate arrays back to back (observed with mistral
+    on the relevance-scoring prompt)."""
+    arrays = []
+    depth = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == "[":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0 and start is not None:
+                arrays.append(text[start:i + 1])
+                start = None
+    return arrays
+
+
 def _parse_relevance_scores(raw: str, n_papers: int):
     """Returns a list of floats aligned by index to the original papers
-    list, or None if parsing genuinely failed. Handles three cases:
-    1. A single well-formed JSON array (the common case)
-    2. A single array with truncation/trailing-comma issues (repaired)
-    3. Multiple separate JSON arrays concatenated (seen with mistral) —
-       merges all objects found across every array into one result set
-    """
+    list (for this batch), or None if parsing genuinely failed."""
     cleaned = raw.strip()
     cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
     cleaned = re.sub(r"\s*```$", "", cleaned)
 
     all_items = []
-
-    # Try the multi-array extraction first, since it's a strict superset:
-    # a single well-formed array is just "one array found" under this
-    # same logic, so we don't need a separate code path for the common
-    # case.
     raw_arrays = _extract_all_json_arrays(cleaned)
 
     if raw_arrays:
@@ -233,9 +255,6 @@ def _parse_relevance_scores(raw: str, n_papers: int):
                 if isinstance(data, list):
                     all_items.extend(data)
             except json.JSONDecodeError:
-                # This particular array segment is malformed (e.g.
-                # truncated) — try the single-array repair path on just
-                # this segment before giving up on it.
                 repaired = _repair_json(arr_text)
                 try:
                     data = json.loads(repaired)
@@ -244,8 +263,6 @@ def _parse_relevance_scores(raw: str, n_papers: int):
                 except (json.JSONDecodeError, TypeError):
                     continue
     else:
-        # No bracket-matched array found at all — fall back to the
-        # original truncation-repair path on the whole text.
         repaired = _repair_json(cleaned)
         try:
             data = json.loads(repaired)
